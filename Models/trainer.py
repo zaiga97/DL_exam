@@ -21,7 +21,7 @@ class DataloaderGenerator:
             transforms.ToTensor(),
             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
         ])
-        dataset = torchvision.datasets.CelebA('CelebA', download=False, transform=transform)
+        dataset = torchvision.datasets.CelebA('CelebA', download=True, transform=transform)
         dataloader = DataLoader(dataset, shuffle=True, batch_size=4, num_workers=2)
         return dataloader
 
