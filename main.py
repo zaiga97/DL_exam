@@ -19,8 +19,8 @@ if __name__ == '__main__':
         os.makedirs(log_dir + '/images')
         os.makedirs(log_dir + '/model')
 
-    g = Generator(input_size=opts.latent_dim, hidden_channels=opts.hidden_dim, nc=1)
-    d = Discriminator(hidden_channels=opts.hidden_dim, nc=1)
+    g = Generator(input_size=opts.latent_dim, hidden_channels=opts.hidden_dim, nc=3)
+    d = Discriminator(hidden_channels=opts.hidden_dim, nc=3)
     schedule = [opts.epochs for _ in range(opts.depth)]
     dl_g = DataloaderGenerator()
     # Improve performance by testing and using the best convolution algorithm
