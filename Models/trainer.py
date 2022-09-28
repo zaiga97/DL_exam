@@ -18,9 +18,9 @@ class DataloaderGenerator:
             transforms.RandomCrop(dim),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
-            transforms.Normalize(mean=(0.5), std=(0.5))
+            transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))
         ])
-        dataset = torchvision.datasets.MNIST('Mnist', download=False, transform=transform)
+        dataset = torchvision.datasets.CelebA('CelebA', download=False, transform=transform)
         dataloader = DataLoader(dataset, shuffle=True, batch_size=8, num_workers=4, pin_memory=True)
         return dataloader
 
