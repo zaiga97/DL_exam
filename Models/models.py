@@ -21,14 +21,21 @@ class LREquilizer(nn.Module):
 
 
 class EQConvBlock(nn.Module):
-    def __init__(self, in_dim: int, out_dim: int, kernel_size: int = 3, padding: int = 1):
+    def __init__(self, in_dim: int, out_dim: int, kernel_size: int = 3, padding: int = 1, pn=False):
         super().__init__()
-        self.convBlock = nn.Sequential(
-            LREquilizer(in_dim=in_dim, kernel_size=3),
-            nn.Conv2d(in_dim, out_dim, kernel_size=kernel_size, padding=padding),
-            PixelNorm(),
-            nn.LeakyReLU(0.2),
-        )
+        if pn:
+            self.convBlock = nn.Sequential(
+                LREquilizer(in_dim=in_dim, kernel_size=kernel_size),
+                nn.Conv2d(in_dim, out_dim, kernel_size=kernel_size, padding=padding),
+                nn.LeakyReLU(0.2),
+                PixelNorm()
+            )
+        else:
+            self.convBlock = nn.Sequential(
+                LREquilizer(in_dim=in_dim, kernel_size=kernel_size),
+                nn.Conv2d(in_dim, out_dim, kernel_size=kernel_size, padding=padding),
+                nn.LeakyReLU(0.2)
+            )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.convBlock(x)
@@ -36,11 +43,11 @@ class EQConvBlock(nn.Module):
 
 class DoubleEQConvBlock(nn.Module):
     def __init__(self, in_dim: int, out_dim: int, kernel_size: int = 3, padding: int = 1, kernel_size2: int = 3,
-                 padding2: int = 1):
+                 padding2: int = 1, pn=False):
         super().__init__()
         self.convBlock = nn.Sequential(
-            EQConvBlock(in_dim, out_dim, kernel_size, padding),
-            EQConvBlock(out_dim, out_dim, kernel_size2, padding2),
+            EQConvBlock(in_dim, in_dim, kernel_size, padding, pn=pn),
+            EQConvBlock(in_dim, out_dim, kernel_size2, padding2, pn=pn)
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -48,7 +55,7 @@ class DoubleEQConvBlock(nn.Module):
 
 
 class Generator(nn.Module):
-    def __init__(self, input_size: int = 64, hidden_channels: int = 128):
+    def __init__(self, input_size: int = 64, hidden_channels: int = 128, nc: int = 3):
         super().__init__()
         self.max_depth = 5
         self.input_size = input_size
@@ -56,18 +63,18 @@ class Generator(nn.Module):
         self.input_layer = nn.ConvTranspose2d(input_size, hidden_channels, 8, 1, 0)
 
         self.blocks = nn.ModuleList([
-            DoubleEQConvBlock(hidden_channels, hidden_channels),  # hidden_channels * 8 * 8
-            DoubleEQConvBlock(hidden_channels, hidden_channels),  # hidden_channels * 16 * 16
-            DoubleEQConvBlock(hidden_channels, hidden_channels // 2),  # hidden_channels//2 * 32 * 32
-            DoubleEQConvBlock(hidden_channels // 2, hidden_channels // 4),  # hidden_channels//4 * 64 * 64
-            DoubleEQConvBlock(hidden_channels // 4, hidden_channels // 8),  # hidden_channels//8 * 128 * 128
+            DoubleEQConvBlock(hidden_channels, hidden_channels, pn=True),  # hidden_channels * 8 * 8
+            DoubleEQConvBlock(hidden_channels, hidden_channels, pn=True),  # hidden_channels * 16 * 16
+            DoubleEQConvBlock(hidden_channels, hidden_channels // 2, pn=True),  # hidden_channels//2 * 32 * 32
+            DoubleEQConvBlock(hidden_channels // 2, hidden_channels // 4, pn=True),  # hidden_channels//4 * 64 * 64
+            DoubleEQConvBlock(hidden_channels // 4, hidden_channels // 8, pn=True)  # hidden_channels//8 * 128 * 128
         ])
         self.out_blocks = nn.ModuleList([
-            EQConvBlock(hidden_channels, 3, kernel_size=1, padding=0),
-            EQConvBlock(hidden_channels, 3, kernel_size=1, padding=0),
-            EQConvBlock(hidden_channels // 2, 3, kernel_size=1, padding=0),
-            EQConvBlock(hidden_channels // 4, 3, kernel_size=1, padding=0),
-            EQConvBlock(hidden_channels // 8, 3, kernel_size=1, padding=0)
+            EQConvBlock(hidden_channels, nc, kernel_size=1, padding=0),
+            EQConvBlock(hidden_channels, nc, kernel_size=1, padding=0),
+            EQConvBlock(hidden_channels // 2, nc, kernel_size=1, padding=0),
+            EQConvBlock(hidden_channels // 4, nc, kernel_size=1, padding=0),
+            EQConvBlock(hidden_channels // 8, nc, kernel_size=1, padding=0)
         ])
 
         # Initialize the weights
@@ -76,41 +83,42 @@ class Generator(nn.Module):
                 nn.init.normal_(m.weight)
                 nn.init.zeros_(m.bias)
 
-    def forward(self, z: torch.Tensor, level: int, alpha: float = 1) -> torch.Tensor:
+    def forward(self, z: torch.Tensor, level: int, alpha: float = 1.) -> torch.Tensor:
         x = self.input_layer(z)
         x = self.blocks[0](x)
         if level == 0:
             return torch.tanh(self.out_blocks[0](x))
 
-        xo = torch.Tensor()
+        xo = None
         for i in range(1, level + 1):
             xo = F.interpolate(x, scale_factor=2, mode='bilinear')
             x = self.blocks[i](xo)
 
         if alpha < 1:
-            return torch.tanh(((1 - alpha) * self.out_blocks[level - 1](xo) + alpha * self.out_blocks[level](x)))
+            return torch.tanh((1 - alpha) * self.out_blocks[level - 1](xo) + (alpha * self.out_blocks[level](x)))
         return torch.tanh(self.out_blocks[level](x))
 
 
 class Discriminator(nn.Module):
-    def __init__(self, hidden_channels: int = 128):
+    def __init__(self, hidden_channels: int = 128, nc: int = 3):
         super().__init__()
         self.max_depth = 5
         self.hidden_channels = hidden_channels
         self.output_layer = nn.Linear(hidden_channels, 1)
+        self.output_conv = EQConvBlock(hidden_channels + 1, hidden_channels, kernel_size=8, padding=0)
         self.blocks = nn.ModuleList([
-            DoubleEQConvBlock(hidden_channels, hidden_channels, kernel_size2=8, padding2=0),  # hidden_channels * 8 * 8
+            DoubleEQConvBlock(hidden_channels, hidden_channels),  # hidden_channels * 8 * 8
             DoubleEQConvBlock(hidden_channels, hidden_channels),  # hidden_channels * 16 * 16
             DoubleEQConvBlock(hidden_channels // 2, hidden_channels),  # hidden_channels * 32 * 32
             DoubleEQConvBlock(hidden_channels // 4, hidden_channels // 2),  # hidden_channels//2 * 64 * 64
-            DoubleEQConvBlock(hidden_channels // 8, hidden_channels // 4),  # hidden_channels//4 * 128 * 128
+            DoubleEQConvBlock(hidden_channels // 8, hidden_channels // 4)  # hidden_channels//4 * 128 * 128
         ])
         self.in_blocks = nn.ModuleList([
-            EQConvBlock(3, hidden_channels, kernel_size=1, padding=0),
-            EQConvBlock(3, hidden_channels, kernel_size=1, padding=0),
-            EQConvBlock(3, hidden_channels // 2, kernel_size=1, padding=0),
-            EQConvBlock(3, hidden_channels // 4, kernel_size=1, padding=0),
-            EQConvBlock(3, hidden_channels // 8, kernel_size=1, padding=0)
+            EQConvBlock(nc, hidden_channels, kernel_size=1, padding=0),
+            EQConvBlock(nc, hidden_channels, kernel_size=1, padding=0),
+            EQConvBlock(nc, hidden_channels // 2, kernel_size=1, padding=0),
+            EQConvBlock(nc, hidden_channels // 4, kernel_size=1, padding=0),
+            EQConvBlock(nc, hidden_channels // 8, kernel_size=1, padding=0)
         ])
 
         # Initialize the weights
@@ -118,6 +126,8 @@ class Discriminator(nn.Module):
             if isinstance(m, nn.Conv2d):
                 nn.init.normal_(m.weight)
                 nn.init.zeros_(m.bias)
+            elif isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight)
 
     def forward(self, x: torch.Tensor, level: int, alpha: float = 1) -> torch.Tensor:
 
@@ -137,6 +147,10 @@ class Discriminator(nn.Module):
             if i > 0:
                 x = F.avg_pool2d(x, kernel_size=2, stride=2)
             else:
-                pass
+                x_std = torch.sqrt(x.var(0, unbiased=False) + 1e-8)
+                mean_std = x_std.mean()
+                mean_std = mean_std.expand(x.size(0), 1, 8, 8)
+                x = torch.cat([x, mean_std], 1)
+                x = self.output_conv(x)
 
         return self.output_layer(x.squeeze(2).squeeze(2))
